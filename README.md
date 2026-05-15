@@ -19,24 +19,30 @@ This repository should not contain:
 ```text
 packages/
   v1.0.0/
-    HC32F460SolderingStation-board_v1-v1.0.0.ota
-    HC32F460SolderingStation-board_v2-v1.0.0.ota
+    ARM32SolderingStation-board_v1-v1.0.0.ota
+    ARM32SolderingStation-board_v2-v1.0.0.ota
     SHA256SUMS.txt
 release-notes/
   v1.0.0.md
 ```
 
+## Asset Naming Convention
+
+- `ARM32SolderingStation-board_v1-v<version>.ota`
+- `ARM32SolderingStation-board_v2-v<version>.ota`
+
+Each GitHub Release tag should correspond to one firmware version, for example `v1.0.0`, and should contain both board-specific encrypted OTA assets. The ESP32-C3 OTA sidecar filters release assets by `boardRevision`, so both board packages can safely live under the same GitHub Release.
+
 ## Release Flow
 
-1. Build encrypted OTA packages in the private source repository.
-2. Copy the resulting `.ota` files into `packages/<version>/`.
-3. Add optional notes into `release-notes/<version>.md`.
-4. Commit and push the changes.
-5. Run the `Publish OTA Release` GitHub Actions workflow.
+1. In the private source repository, run `tools/publish_public_ota_release.py --version 1.0.0`.
+2. The script builds encrypted OTA packages for both board revisions.
+3. The script copies them into `packages/v1.0.0/`, updates `release-notes/v1.0.0.md`, commits, tags, and pushes.
+4. This repository's GitHub Actions workflow publishes the GitHub Release automatically on tag push.
 
 ## Building Packages
 
-Encrypted `.ota` packages are expected to be built in the main firmware repository with the OTA packaging tooling there, for example via `tools/build_ota_package.py`.
+Encrypted `.ota` packages are built in the private firmware repository with the OTA packaging tooling there, for example via `tools/build_ota_package.py`. The recommended publishing entry point is the private repo helper script `tools/publish_public_ota_release.py`.
 
 ## Security Notes
 

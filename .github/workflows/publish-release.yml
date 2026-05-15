@@ -1,6 +1,9 @@
 name: Publish OTA Release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
@@ -36,12 +39,26 @@ jobs:
         id: meta
         shell: bash
         run: |
-          version="${{ inputs.version }}"
-          if [[ -z "${{ inputs.release_name }}" ]]; then
-            echo "release_name=${version}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+            release_name="${{ inputs.release_name }}"
+            draft="${{ inputs.draft }}"
+            prerelease="${{ inputs.prerelease }}"
           else
-            echo "release_name=${{ inputs.release_name }}" >> "$GITHUB_OUTPUT"
+            version="${GITHUB_REF_NAME}"
+            release_name=""
+            draft="false"
+            prerelease="false"
           fi
+
+          if [[ -z "${release_name}" ]]; then
+            release_name="${version}"
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${release_name}" >> "$GITHUB_OUTPUT"
+          echo "draft=${draft}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
 
           notes_file="release-notes/${version}.md"
           if [[ -f "$notes_file" ]]; then
@@ -55,7 +72,7 @@ jobs:
       - name: Validate release assets
         shell: bash
         run: |
-          version="${{ inputs.version }}"
+          version="${{ steps.meta.outputs.version }}"
           asset_dir="packages/${version}"
 
           [[ -d "$asset_dir" ]] || {
@@ -73,10 +90,352 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version }}
+          tag_name: ${{ steps.meta.outputs.version }}
           name: ${{ steps.meta.outputs.release_name }}
           body_path: ${{ steps.meta.outputs.body_path }}
-          draft: ${{ inputs.draft }}
-          prerelease: ${{ inputs.prerelease }}
+          draft: ${{ steps.meta.outputs.draft }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           files: |
-            packages/${{ inputs.version }}/*
+          packages/${{ steps.meta.outputs.version }}/*
+    *** Add File: /home/val/Code/HC32F460SolderingStation/docs/public-ota-release-repo.md
+    # Public OTA Release Repo
+
+    The public encrypted firmware repository is:
+
+    - `bve/ARM32SolderingStation`
+
+    ## Release Layout
+
+    Each firmware version is published as one GitHub Release tag and one matching directory in the public repo:
+
+    ```text
+    packages/
+      v1.2.3/
+      ARM32SolderingStation-board_v1-v1.2.3.ota
+      ARM32SolderingStation-board_v2-v1.2.3.ota
+      SHA256SUMS.txt
+    release-notes/
+      v1.2.3.md
+    ```
+
+    ## Naming Convention
+
+    - Release tag: `v<app-version>`
+    - Board v1 asset: `ARM32SolderingStation-board_v1-v<app-version>.ota`
+    - Board v2 asset: `ARM32SolderingStation-board_v2-v<app-version>.ota`
+
+    The ESP32-C3 sidecar now filters release assets by `boardRevision`, so both board packages are expected to be attached to the same GitHub Release.
+
+    ## Publish Flow
+
+    From the private source repository:
+
+    ```bash
+    python3 tools/publish_public_ota_release.py --version 1.2.3
+    ```
+
+    The helper script:
+
+    1. builds encrypted OTA packages for `board_v1_app` and `board_v2_app`;
+    2. copies them into the sibling public repo;
+    3. writes `SHA256SUMS.txt` and release notes;
+    4. commits the public repo changes;
+    5. creates tag `v1.2.3`;
+    6. pushes branch and tag to GitHub.
+
+    The public repo GitHub Actions workflow then publishes the GitHub Release automatically.
+    *** Add File: /home/val/Code/HC32F460SolderingStation/tools/publish_public_ota_release.py
+    #!/usr/bin/env python3
+    """
+    Build encrypted OTA packages in the private firmware repo and publish them to
+    the public ARM32SolderingStation release repository.
+
+    Examples:
+      python3 tools/publish_public_ota_release.py --version 1.2.3
+
+      python3 tools/publish_public_ota_release.py --version v1.2.3 \
+        --release-notes-file /tmp/v1.2.3.md
+
+      python3 tools/publish_public_ota_release.py --version 1.2.3 --stage-only
+    """
+
+    from __future__ import annotations
+
+    import argparse
+    import hashlib
+    import shutil
+    import subprocess
+    import sys
+    from pathlib import Path
+
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    BUILD_OTA_TOOL = PROJECT_ROOT / "tools" / "build_ota_package.py"
+    DEFAULT_PUBLIC_REPO = PROJECT_ROOT.parent / "ARM32SolderingStation"
+    ASSET_PREFIX = "ARM32SolderingStation"
+    DEFAULT_FIRMWARES = {
+      1: PROJECT_ROOT / ".pio" / "build" / "board_v1_app" / "firmware.bin",
+      2: PROJECT_ROOT / ".pio" / "build" / "board_v2_app" / "firmware.bin",
+    }
+
+
+    def parse_args() -> argparse.Namespace:
+      parser = argparse.ArgumentParser(
+        description="Build encrypted OTA packages and publish them to the public ARM32SolderingStation repo"
+      )
+      parser.add_argument(
+        "--version",
+        required=True,
+        help="Application version, with or without leading v, for example 1.2.3 or v1.2.3",
+      )
+      parser.add_argument(
+        "--public-repo-path",
+        type=Path,
+        default=DEFAULT_PUBLIC_REPO,
+        help=f"Path to the public release repository (default: {DEFAULT_PUBLIC_REPO})",
+      )
+      parser.add_argument(
+        "--board-v1-firmware",
+        type=Path,
+        default=DEFAULT_FIRMWARES[1],
+        help=f"Path to board_v1 app firmware.bin (default: {DEFAULT_FIRMWARES[1]})",
+      )
+      parser.add_argument(
+        "--board-v2-firmware",
+        type=Path,
+        default=DEFAULT_FIRMWARES[2],
+        help=f"Path to board_v2 app firmware.bin (default: {DEFAULT_FIRMWARES[2]})",
+      )
+      parser.add_argument(
+        "--release-notes-file",
+        type=Path,
+        help="Optional markdown file to copy into release-notes/<tag>.md",
+      )
+      parser.add_argument(
+        "--min-bootloader-version",
+        help="Optional minimum bootloader version passed through to build_ota_package.py",
+      )
+      parser.add_argument("--mandatory", action="store_true", help="Mark the OTA as mandatory")
+      parser.add_argument(
+        "--no-rollback",
+        action="store_true",
+        help="Clear the rollback-allowed manifest flag",
+      )
+      parser.add_argument(
+        "--recovery-only",
+        action="store_true",
+        help="Set the recovery-only manifest flag",
+      )
+      parser.add_argument(
+        "--stage-only",
+        action="store_true",
+        help="Generate and stage files in the public repo, but do not commit, tag, or push",
+      )
+      return parser.parse_args()
+
+
+    def normalize_version(value: str) -> tuple[str, str]:
+      version = value.strip()
+      if not version:
+        raise ValueError("version must not be empty")
+
+      if version.startswith("v"):
+        tag = version
+        app_version = version[1:]
+      else:
+        tag = f"v{version}"
+        app_version = version
+
+      if not app_version:
+        raise ValueError("application version must not be empty")
+
+      return tag, app_version
+
+
+    def asset_name(tag: str, board_revision: int) -> str:
+      return f"{ASSET_PREFIX}-board_v{board_revision}-{tag}.ota"
+
+
+    def run(command: list[str], cwd: Path | None = None, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
+      return subprocess.run(
+        command,
+        cwd=str(cwd) if cwd is not None else None,
+        check=True,
+        text=True,
+        capture_output=capture_output,
+      )
+
+
+    def git_output(repo: Path, *args: str) -> str:
+      result = run(["git", "-C", str(repo), *args], capture_output=True)
+      return result.stdout.strip()
+
+
+    def ensure_clean_worktree(repo: Path) -> None:
+      status = git_output(repo, "status", "--porcelain")
+      if status:
+        raise RuntimeError(f"public repo has uncommitted changes:\n{status}")
+
+
+    def ensure_tag_absent(repo: Path, tag: str) -> None:
+      local = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
+        check=False,
+        text=True,
+        capture_output=True,
+      )
+      if local.returncode == 0:
+        raise RuntimeError(f"tag already exists locally in public repo: {tag}")
+
+      remote = subprocess.run(
+        ["git", "-C", str(repo), "ls-remote", "--tags", "origin", tag],
+        check=False,
+        text=True,
+        capture_output=True,
+      )
+      if remote.returncode == 0 and remote.stdout.strip():
+        raise RuntimeError(f"tag already exists on origin: {tag}")
+
+
+    def sha256_hex(path: Path) -> str:
+      digest = hashlib.sha256()
+      with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+          digest.update(chunk)
+      return digest.hexdigest()
+
+
+    def build_package(
+      firmware_path: Path,
+      output_path: Path,
+      app_version: str,
+      board_revision: int,
+      args: argparse.Namespace,
+    ) -> None:
+      command = [
+        sys.executable,
+        str(BUILD_OTA_TOOL),
+        str(firmware_path),
+        "--output",
+        str(output_path),
+        "--version",
+        app_version,
+        "--board-rev",
+        str(board_revision),
+      ]
+
+      if args.min_bootloader_version:
+        command.extend(["--min-bootloader-version", args.min_bootloader_version])
+      if args.mandatory:
+        command.append("--mandatory")
+      if args.no_rollback:
+        command.append("--no-rollback")
+      if args.recovery_only:
+        command.append("--recovery-only")
+
+      run(command, cwd=PROJECT_ROOT)
+
+
+    def write_sha256_sums(asset_paths: list[Path], output_path: Path) -> None:
+      lines = [f"{sha256_hex(path)}  {path.name}" for path in asset_paths]
+      output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+    def write_release_notes(tag: str, asset_paths: list[Path], output_path: Path, source_path: Path | None) -> None:
+      if source_path is not None:
+        shutil.copyfile(source_path, output_path)
+        return
+
+      lines = [
+        f"# {tag}",
+        "",
+        "Encrypted OTA firmware release.",
+        "",
+        "## Assets",
+        "",
+      ]
+      lines.extend(f"- {path.name}" for path in asset_paths)
+      lines.append("")
+      output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+    def main() -> int:
+      args = parse_args()
+
+      try:
+        tag, app_version = normalize_version(args.version)
+      except ValueError as exc:
+        print(f"[!] {exc}")
+        return 1
+
+      public_repo = args.public_repo_path.resolve()
+      board_firmwares = {
+        1: args.board_v1_firmware.resolve(),
+        2: args.board_v2_firmware.resolve(),
+      }
+
+      if not BUILD_OTA_TOOL.is_file():
+        print(f"[!] OTA packaging tool not found: {BUILD_OTA_TOOL}")
+        return 1
+
+      if not public_repo.is_dir():
+        print(f"[!] Public repo path not found: {public_repo}")
+        return 1
+
+      if not (public_repo / ".git").exists():
+        print(f"[!] Public repo path is not a git repository: {public_repo}")
+        return 1
+
+      for board_revision, firmware_path in board_firmwares.items():
+        if not firmware_path.is_file():
+          print(f"[!] Firmware for board_v{board_revision} not found: {firmware_path}")
+          return 1
+
+      if args.release_notes_file is not None and not args.release_notes_file.is_file():
+        print(f"[!] Release notes file not found: {args.release_notes_file}")
+        return 1
+
+      try:
+        ensure_clean_worktree(public_repo)
+        if not args.stage_only:
+          ensure_tag_absent(public_repo, tag)
+      except RuntimeError as exc:
+        print(f"[!] {exc}")
+        return 1
+
+      release_dir = public_repo / "packages" / tag
+      notes_path = public_repo / "release-notes" / f"{tag}.md"
+      release_dir.mkdir(parents=True, exist_ok=True)
+
+      asset_paths: list[Path] = []
+      for board_revision, firmware_path in board_firmwares.items():
+        output_path = release_dir / asset_name(tag, board_revision)
+        print(f"[*] Building board_v{board_revision} OTA package -> {output_path}")
+        build_package(firmware_path, output_path, app_version, board_revision, args)
+        asset_paths.append(output_path)
+
+      sha256_path = release_dir / "SHA256SUMS.txt"
+      write_sha256_sums(asset_paths, sha256_path)
+      write_release_notes(tag, asset_paths, notes_path, args.release_notes_file)
+
+      relative_paths = [path.relative_to(public_repo) for path in [release_dir, notes_path]]
+      run(["git", "-C", str(public_repo), "add", "--", *(str(path) for path in relative_paths)])
+
+      if args.stage_only:
+        print(f"[+] Staged release files for {tag} in {public_repo}")
+        print("[*] Skipping commit, tag, and push because --stage-only was requested")
+        return 0
+
+      branch = git_output(public_repo, "rev-parse", "--abbrev-ref", "HEAD")
+      commit_message = f"Release {tag}"
+      run(["git", "-C", str(public_repo), "commit", "-m", commit_message])
+      run(["git", "-C", str(public_repo), "tag", "-a", tag, "-m", commit_message])
+      run(["git", "-C", str(public_repo), "push", "origin", branch, tag])
+
+      print(f"[+] Published {tag} to {public_repo}")
+      print(f"[+] GitHub Release workflow should publish assets for tag {tag}")
+      return 0
+
+
+    if __name__ == "__main__":
+      sys.exit(main())
