@@ -1,0 +1,82 @@
+name: Publish OTA Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag, for example v1.0.0
+        required: true
+        type: string
+      release_name:
+        description: Optional release name override
+        required: false
+        type: string
+      draft:
+        description: Create the release as a draft
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the release as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          version="${{ inputs.version }}"
+          if [[ -z "${{ inputs.release_name }}" ]]; then
+            echo "release_name=${version}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_name=${{ inputs.release_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+          notes_file="release-notes/${version}.md"
+          if [[ -f "$notes_file" ]]; then
+            echo "body_path=${notes_file}" >> "$GITHUB_OUTPUT"
+          else
+            temp_notes="$(mktemp)"
+            printf "Encrypted OTA firmware release %s\n" "$version" > "$temp_notes"
+            echo "body_path=${temp_notes}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate release assets
+        shell: bash
+        run: |
+          version="${{ inputs.version }}"
+          asset_dir="packages/${version}"
+
+          [[ -d "$asset_dir" ]] || {
+            echo "Expected asset directory not found: $asset_dir"
+            exit 1
+          }
+
+          compgen -G "$asset_dir/*.ota" > /dev/null || {
+            echo "No .ota files found in $asset_dir"
+            exit 1
+          }
+
+          find "$asset_dir" -maxdepth 1 -type f | sort
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ steps.meta.outputs.release_name }}
+          body_path: ${{ steps.meta.outputs.body_path }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          files: |
+            packages/${{ inputs.version }}/*
