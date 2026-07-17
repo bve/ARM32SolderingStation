@@ -1,0 +1,2 @@
+f76dafc963e5bee78c872884f1b5ce1ed4987c9fe3d3e8eb1220d2fda712b625  ARM32SolderingStation-board_v1-v1.0.0.5.ota
+4fd92cab020506c1ebaf0528e4ce61a5f64dfa0700d9c283be8e3f1006a529a3  ARM32SolderingStation-board_v2-v1.0.0.5.ota
