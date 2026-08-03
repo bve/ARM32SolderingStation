@@ -97,3 +97,9 @@ jobs:
           prerelease: ${{ steps.meta.outputs.prerelease }}
           files: |
             packages/${{ steps.meta.outputs.version }}/*
+
+      - name: Archive superseded OTA assets
+        if: ${{ steps.meta.outputs.draft != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/archive-superseded-ota-assets.sh
