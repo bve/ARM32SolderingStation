@@ -33,10 +33,11 @@ release-notes/
 
 Each GitHub Release tag should correspond to one firmware version, for example `v1.0.0`, and should contain both board-specific encrypted OTA assets. The ESP32-C3 OTA sidecar filters release assets by `boardRevision`, so both board packages can safely live under the same GitHub Release.
 
-Only the highest published firmware version keeps asset names ending in `.ota`.
-After a newer release is published, the workflow renames older OTA assets to
-`.ota.archived-<asset-id>`. This keeps the files recoverable while preventing
-deployed sidecars from paginating through multiple compatible releases.
+Only the highest firmware version keeps a published GitHub Release. After a
+newer release is published, the workflow removes older Release objects while
+preserving their Git tags, release notes, and files under `packages/`. This
+keeps old packages recoverable while ensuring deployed sidecars parse a single
+release object and request a single release-list page.
 
 ## Release Flow
 

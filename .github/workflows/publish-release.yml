@@ -98,8 +98,8 @@ jobs:
           files: |
             packages/${{ steps.meta.outputs.version }}/*
 
-      - name: Archive superseded OTA assets
+      - name: Remove superseded OTA releases
         if: ${{ steps.meta.outputs.draft != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/archive-superseded-ota-assets.sh
+        run: bash .github/scripts/prune-superseded-ota-releases.sh
